@@ -10,35 +10,51 @@ from StoryResponse import StoryResponse
 app = Flask(__name__)
 CORS(app)  # enable CORS
 
-START_STORY_PROMPT = "[PROMPT]Let's play a game. I am the sole protagonist of this story.You are the narrator.This story is made up of different genres, fantasy, horror and science fiction, cleverly mixed together.Describe this story in the second person in 50 words.Describe two options 1 and 2 with less than 20 words.Wait for the user to choose one of the two options.Continue the story only after the user has made the choice.Continue the story description in 50 words.Go on with the choice system.The story must not end.Output should follow similar format to example, ONLY output JSON matching the example, no additional output.[/PROMPT][EXAMPLE]{\"story\": \"You find yourself lost in a dark forest. Strange whispers fill the air, and your heart races with fear. Suddenly, a creature appears before you: half-man, half-machine, it offers you a choice.\",\"options\": [\"Follow the creature to a secret lab where you discover an incredible technology, but soon realize the horrors it hides.\",\"Run away from the creature and find a magical portal that leads to a kingdom in ruins, where you must face a powerful sorceress.\"]}[/EXAMPLE][OUTPUT]{\"story\": \"You wake up in a surreal world. A strange voice whispers in your ear, urging you to explore. As you wander, you encounter a creepy mansion: it was abandoned for years, but today the door is open. You have a choice.\",\"options\": [\"Enter the mansion and uncover its secrets, but be aware of the ancient curse that lurks within.\",\"Ignore the mansion and continue walking until you reach a glowing portal that transports you to an unknown planet full of danger.\"]}[/OUTPUT]"
-CONTINUE_STORY_PROMPT = "Prompt: \"\"\" Let's continue a game we started earlier. I am the sole protagonist of this story. You are the narrator. You will be provided what happened so far in the story. Continue what would happen in the story. Write the continued story in the second person in 40-60 words. Describe two options 1 and 2 with less than 20 words.Wait for the user to choose one of the two options. Continue the story only after the user has made the choice. Continue the story with 40-60 words. Go on with the choice system. The story must not end.Output should follow similar format to example, ONLY fill in and output the JSON in OUTPUT, no additional output. \"\"\" Example: \"\"\" {\"story\":\"You hesitantly follow the creature through the twisted undergrowth, eventually arriving at a hidden laboratory concealed within the forest. As you explore the facility, you uncover advanced technology beyond your wildest imagination. However, your fascination turns to dread when you stumble upon the dark truth: the machines are powered by human souls, trapped and tormented in an endless cycle of pain. You realize the terrible price of progress and must decide whether to destroy the lab or seek a way to free the imprisoned souls.\",\"options\": [\"Sabotage the lab's power source, risking your life to destroy the machines and end the suffering.\",\"Search for a method to release the trapped souls, hoping to save them and expose the lab's dark secrets.\"]} \"\"\"Story so far: \"\"\" __PREVIOUS_STORY__ \"\"\"Output:"
-
-START_STORY_PROMPT = "Write a story, you should also provide 2-4 very concise options for the player to choose for the story to go next."
+GENERATE_OUTLINE_PROMPT = "Outline the world that short story will take place in. The short story will have a sole protagonist who is the player. Choose the settings, and key features of the world, any key characters, adversaries, goals, and issues to overcome. The world should be setup such that many different dramatic situations can occur throughout the story. Output max of 300 characters."
+START_STORY_PROMPT = "[PROMPT]Let's play a game. I am the sole protagonist of this story.You are the narrator. Describe this story in the second person in 50 words. Describe 2-4 options with less than 10 words. The story takes place in the universe described in the following outline. Wait for the user to choose one of the options.Continue the story only after the user has made the choice.[/PROMPT][OUTLINE]__OUTLINE__[/OUTLINE]"
+CONTINUE_STORY_PROMPT = "Prompt: \"\"\" Let's continue a game we started earlier. I am the sole protagonist of this story. You are the narrator. You will be provided what happened so far in the story in the \"Previous Story\" section. Continue what would happen in the story. Write the continued story in the second person in up to 100 words. The story takes place in the universe described in the following outline. Describe 2-4 options in less than 10 words.Wait for the user to choose one of the options. Continue the story only after the user has made the choice. The story must not end. Outline: \"\"\"__OUTLINE__\"\"\" \"\"\" Previous chapter: \"\"\" __PREVIOUS_STORY__ \"\"\""
+CHAPTER_IMAGE_PROMPT = "We want to generate an image to represent this chapter. Describe how that image in 1-2 sentences using as much detail as possible including capturing the setting, emotion, and atmosphere of the scene. Keep it the image description family friendly. Somewhat abstract, no closeup of faces. Chapter text: \"\"\"[CHAPTER_TEXT]\"\"\""
+MODEL = "gpt-4"
 
 @app.route('/api/story', methods=['POST'])
 def post_story():
     data = request.get_json()
+    outline = data.get('outline')
     story = data.get('story')
-    option_text = data.get('optionText')
+    option_text = data.get('optionText')    
 
-    app.logger.info("In API")
+    if(option_text==None or option_text==""):
+        # Create World Outline
+        prompt = GENERATE_OUTLINE_PROMPT
 
-    prompt = START_STORY_PROMPT
+        messages= [
+            {"role": "user", "content": prompt}
+        ]
+        response = openai.ChatCompletion.create(
+            model=MODEL,
+            messages=messages
+        )
+
+        outline = response["choices"][0]["message"]["content"]
+
+    prompt = START_STORY_PROMPT.replace("__OUTLINE__",outline)
     if(option_text==None or option_text!=""):
-        prompt = CONTINUE_STORY_PROMPT.replace("__PREVIOUS_STORY__",story + "\n\n Player chose: " + option_text)
+        prompt = CONTINUE_STORY_PROMPT.replace("__PREVIOUS_STORY__",story + "\n\n Player chose: " + option_text).replace("__OUTLINE__",outline)
+
+    app.logger.info(prompt)
     messages= [
         {"role": "user", "content": prompt}
     ]
     functions= [  
-    {
-        "name": "handle_story_response",
-        "description": "Handles all responses",
-        "parameters": StoryResponse.model_json_schema()
-    }
-]  
+        {
+            "name": "handle_story_response",
+            "description": "Handles all responses",
+            "parameters": StoryResponse.model_json_schema()
+        }
+    ]  
 
     response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model=MODEL,
         messages=messages,
         functions=functions,
         function_call={"name": "handle_story_response"}
@@ -47,7 +63,8 @@ def post_story():
     response_message = response["choices"][0]["message"]
 
     # Check if the model wants to call a function
-    app.logger.info(response_message)
+    story = ""
+    options = []
     if response_message.get("function_call"):
         # Call the function. The JSON response may not always be valid so make sure to handle errors
         function_name = response_message["function_call"]["name"]
@@ -56,22 +73,43 @@ def post_story():
                 "handle_story_response": handle_story_response,
         }
         function_to_call = available_functions[function_name] 
-        app.logger.info("calling function")
         function_args = json.loads(response_message["function_call"]["arguments"])
         function_response = function_to_call(**function_args)
+        story = function_response.story
+        options = function_response.options
 
+    # Create chapter image
+    """
+    prompt = CHAPTER_IMAGE_PROMPT.replace("[CHAPTER_TEXT]", story)
+
+    messages= [
+        {"role": "user", "content": prompt}
+    ]
+    response = openai.ChatCompletion.create(
+        model=MODEL,
+        messages=messages
+    )
+
+    image_prompt = response["choices"][0]["message"]["content"]
+    response = openai.Image.create(
+        prompt=image_prompt,
+        n=1,
+        size="256x256",
+    )
+    
+    image_url = response["data"][0]["url"]
+    """
+    image_url=""
     response = {
         'status': 'success',
-        'story': function_response.story,
-        'options': function_response.options
+        'outline': outline,
+        'story': story,
+        'options': options,
+        'image_url': image_url
     }
     return jsonify(response), 201
 
 def handle_story_response(story,options):
-    app.logger.info(story)
-    app.logger.info("Options")
-    app.logger.info(options)
-
     story_response = StoryResponse(story=story,options=options)
     return story_response
 
