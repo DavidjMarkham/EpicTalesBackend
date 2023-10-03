@@ -1,6 +1,7 @@
 # About
 
 This is an interactive story generator. It uses AI (OpenAI GPT) to create endless stories that the player can influence the direction of by choosing what happens next.
+![Example](images/example.gif)
 - This is the back-end (Python/Flask) for the interactive story generator, in order to run the app locally you will need to setup the front-end (HTML, Javascript, css) as well: https://github.com/DavidjMarkham/InteractiveStoryGeneratorFrontend
 - This python-based web api was created with Flask
 - App runs on port 5000 by default
