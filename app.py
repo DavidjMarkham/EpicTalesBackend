@@ -11,19 +11,22 @@ app = Flask(__name__)
 CORS(app)  # enable CORS
 
 GENERATE_OUTLINE_PROMPT = "Outline the world that short story will take place in. The short story will have a sole protagonist who is the player. Choose the settings, and key features of the world, any key characters, adversaries, goals, and issues to overcome. The world should be setup such that many different dramatic situations can occur throughout the story. Output max of 300 characters."
-START_STORY_PROMPT = "[PROMPT]Let's play a game. I am the sole protagonist of this story.You are the narrator. Describe this story in the second person in 50 words. Describe 2-4 options with less than 10 words. The story takes place in the universe described in the following outline. Wait for the user to choose one of the options.Continue the story only after the user has made the choice.[/PROMPT][OUTLINE]__OUTLINE__[/OUTLINE]"
-CONTINUE_STORY_PROMPT = "Prompt: \"\"\" Let's continue a game we started earlier. I am the sole protagonist of this story. You are the narrator. You will be provided what happened so far in the story in the \"Previous Story\" section. Continue what would happen in the story. Write the continued story in the second person. Output the contiuation of the story (100 words) and the options the player can choose to take next (10 words each). The story takes place in the universe described in the following outline. Describe 2-4 options.Wait for the user to choose one of the options. Continue the story only after the user has made the choice. The story must not end. Outline: \"\"\"__OUTLINE__\"\"\" \"\"\" Previous chapter: \"\"\" __PREVIOUS_STORY__ \"\"\""
+START_STORY_PROMPT = "[PROMPT]Write a novel. I am the sole protagonist of this story.You are the narrator. Describe this story in the second person in 200 words. Describe 2-4 options with less than 10 words. The story takes place in the universe described in the following outline. Wait for the user to choose one of the options.Continue the story only after the user has made the choice.  Output in the JSON format in EXAMPLE_OUTPUT.[/PROMPT][OUTLINE]__OUTLINE__[/OUTLINE][EXAMPLE_OUTPUT]{\"story\": \"Story...\",\"options\": [\"Option 1\",\"Option 2\"]}[/EXAMPLE_OUTPUT]"
+CONTINUE_STORY_PROMPT = "Prompt: \"\"\" Let's continue a novel we started earlier. I am the sole protagonist of this story. You are the narrator. You will be provided what happened so far in the story in the \"Story so far\" section. Continue the story from there. Write the continued story in the second person. Output the continuation of the story (100 words) and the options the player can choose to take next (10 words each). The story takes place in the universe described in the following outline. Describe 2-4 options.Wait for the user to choose one of the options. Continue the story only after the user has made the choice. The continued story should make the players choice meaningful and impactful to the story, emphasizing an emotional, drama filled story. The story must not end. Output in the JSON format in EXAMPLE_OUTPUT. Story so far: \"\"\" __STORY_SO_FAR__ \"\"\" Outline: \"\"\"__OUTLINE__\"\"\" \"\"\"[EXAMPLE_OUTPUT]{\"story\": \"Story...\",\"options\": [\"Option 1\",\"Option 2\"]}[/EXAMPLE_OUTPUT]"
 CHAPTER_IMAGE_PROMPT = "We want to generate an image to represent this chapter. Describe how that image in 30 words or less using as much detail as possible including capturing the setting, emotion, and atmosphere of the scene. Keep it the image description family friendly. Somewhat abstract, no closeup of faces. Chapter text: \"\"\"[CHAPTER_TEXT]\"\"\""
+SUMMARIZE_STORY_SO_FAR_PROMPT = "Summarize the following story in 200 words or less. The story so far: \"\"\"__STORY_SO_FAR__\"\"\""
 MODEL = "gpt-3.5-turbo"
 
 @app.route('/api/story', methods=['POST'])
 def post_story():
     data = request.get_json()
     outline = data.get('outline')
+    story_so_far = data.get('storySoFar')
     story = data.get('story')
-    option_text = data.get('optionText')    
+    option_text = data.get('optionText')
+    first_story = (option_text==None or option_text=="")    
 
-    if(option_text==None or option_text==""):
+    if(first_story):
         # Create World Outline
         prompt = GENERATE_OUTLINE_PROMPT
 
@@ -35,11 +38,27 @@ def post_story():
             messages=messages
         )
 
-        outline = response["choices"][0]["message"]["content"]
+        outline = response["choices"][0]["message"]["content"]        
+
+    if(not first_story):
+        # Summarize the story so far
+        story_so_far = story_so_far + "\n" + story
+        prompt = SUMMARIZE_STORY_SO_FAR_PROMPT.replace("__STORY_SO_FAR__",story_so_far)
+
+        messages= [
+            {"role": "user", "content": prompt}
+        ]
+        response = openai.ChatCompletion.create(
+            model=MODEL,
+            messages=messages
+        )
+
+        story_so_far = response["choices"][0]["message"]["content"]
+        story_so_far = story_so_far + "\n Player's last choice: " + option_text
 
     prompt = START_STORY_PROMPT.replace("__OUTLINE__",outline)
-    if(option_text==None or option_text!=""):
-        prompt = CONTINUE_STORY_PROMPT.replace("__PREVIOUS_STORY__",story + "\n\n Player chose: " + option_text).replace("__OUTLINE__",outline)
+    if(not first_story):
+        prompt = CONTINUE_STORY_PROMPT.replace("__STORY_SO_FAR__",story_so_far).replace("__OUTLINE__",outline)
     
     messages= [
         {"role": "user", "content": prompt}
@@ -57,8 +76,7 @@ def post_story():
         messages=messages,
         functions=functions,
         function_call={"name": "handle_story_response"}
-    )    
-    
+    )        
     response_message = response["choices"][0]["message"]
 
     # Check if the model wants to call a function
@@ -75,13 +93,14 @@ def post_story():
         function_args = json.loads(response_message["function_call"]["arguments"])
         function_response = function_to_call(**function_args)
         story = function_response.story
-        options = function_response.options
+        options = function_response.options    
 
     response = {
         'status': 'success',
         'outline': outline,
         'story': story,
-        'options': options
+        'options': options,
+        'storySoFar': story_so_far
     }
     return jsonify(response), 201
 
