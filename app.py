@@ -3,6 +3,8 @@ from flask_cors import CORS  # import CORS
 import openai
 import json
 import os
+from texttospeech import TextToSpeech
+from flask import send_from_directory
 from dotenv import load_dotenv
 load_dotenv() 
 from StoryResponse import StoryResponse
@@ -10,6 +12,7 @@ from StoryResponse import StoryResponse
 app = Flask(__name__)
 CORS(app)  # enable CORS
 
+AUDIO_FILES_DIR = "audio_files"
 GENERATE_OUTLINE_PROMPT = "Outline the world that short story will take place in. The short story will have a sole protagonist who is the player. Choose the settings, and key features of the world, any key characters, adversaries, goals, and issues to overcome. The world should be setup such that many different dramatic situations can occur throughout the story. Output max of 300 characters."
 START_STORY_PROMPT = "[PROMPT]Write a novel. I am the sole protagonist of this story.You are the narrator. Describe this story in the second person in 200 words. Describe 2-4 options with less than 10 words. The story takes place in the universe described in the following outline. Wait for the user to choose one of the options.Continue the story only after the user has made the choice.  Output in the JSON format in EXAMPLE_OUTPUT.[/PROMPT][OUTLINE]__OUTLINE__[/OUTLINE][EXAMPLE_OUTPUT]{\"story\": \"Story...\",\"options\": [\"Option 1\",\"Option 2\"]}[/EXAMPLE_OUTPUT]"
 CONTINUE_STORY_PROMPT = "Prompt: \"\"\" Let's continue a novel we started earlier. I am the sole protagonist of this story. You are the narrator. You will be provided what happened so far in the story in the \"Story so far\" section. Continue the story from there. Write the continued story in the second person. Output the continuation of the story (100 words) and the options the player can choose to take next (10 words each). The story takes place in the universe described in the following outline. Describe 2-4 options.Wait for the user to choose one of the options. Continue the story only after the user has made the choice. The continued story should make the players choice meaningful and impactful to the story, emphasizing an emotional, drama filled story. The story must not end. Output in the JSON format in EXAMPLE_OUTPUT. Story so far: \"\"\" __STORY_SO_FAR__ \"\"\" Outline: \"\"\"__OUTLINE__\"\"\" \"\"\"[EXAMPLE_OUTPUT]{\"story\": \"Story...\",\"options\": [\"Option 1\",\"Option 2\"]}[/EXAMPLE_OUTPUT]"
@@ -104,6 +107,20 @@ def post_story():
     }
     return jsonify(response), 201
 
+@app.route('/api/read_text', methods=['POST'])
+def read_text():
+    chapter_text = request.get_json().get('story')
+    text_to_speech = TextToSpeech()
+    
+    audio_file = text_to_speech.generateAudio(chapter_text)
+    audio_url = f"{os.environ['BASE_URL']}/audio/{audio_file}"
+
+    response = {
+        'status': 'success',
+        'audioFilename': audio_url,
+    }
+    return jsonify(response), 201
+
 @app.route('/api/chapter_image', methods=['POST'])
 def post_chapter_image():
     data = request.get_json()
@@ -125,7 +142,7 @@ def post_chapter_image():
     response = openai.Image.create(
         prompt=image_prompt,
         n=1,
-        size="256x256",
+        size="1024x1024",
     )
     
     image_url = response["data"][0]["url"]
@@ -136,6 +153,16 @@ def post_chapter_image():
     }
     return jsonify(response), 201
 
+
+@app.route('/api/audio/<filename>', methods=['GET'])
+def serve_audio_file(filename):
+    try:
+        # Ensure filename is secure before serving
+        safe_filename = os.path.normpath(os.path.join(AUDIO_FILES_DIR, filename))
+        
+        return send_from_directory(AUDIO_FILES_DIR, filename, as_attachment=True)
+    except FileNotFoundError:
+        return jsonify({"error": "File not found"}), 404
 
 def handle_story_response(story,options):
     story_response = StoryResponse(story=story,options=options)
